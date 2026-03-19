@@ -247,6 +247,13 @@ def processar_imagem(path):
 def filtrar_tags_por_prefixo(tags, prefixo):
     return sorted([tag for tag in tags if tag.startswith(prefixo)])
 
+
+def tamanho_arquivo_seguro(path):
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return float("inf")
+
 def main():
     if len(sys.argv) < 2:
         print("Uso: python tag_images.py /pasta")
@@ -265,7 +272,7 @@ def main():
             if file.lower().endswith(SUPPORTED_EXT):
                 arquivos.append(os.path.join(root, file))
 
-    arquivos.sort()
+    arquivos.sort(key=lambda p: (tamanho_arquivo_seguro(p), p.lower()))
 
     total = len(arquivos)
 
