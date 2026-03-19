@@ -43,7 +43,7 @@ pip install --upgrade pip
 # INSTALAR LIBS
 # =========================
 echo "📚 Instalando bibliotecas Python..."
-pip install opencv-python scikit-learn pillow numpy
+pip install opencv-python scikit-learn pillow numpy tqdm transformers torch
 
 # =========================
 # FINAL

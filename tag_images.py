@@ -8,6 +8,21 @@ import tempfile
 import subprocess
 from tqdm import tqdm
 
+HF_CACHE_DIR = os.path.join(tempfile.gettempdir(), "picselector_hf_cache")
+os.environ.setdefault("HF_HOME", HF_CACHE_DIR)
+os.environ.setdefault("HUGGINGFACE_HUB_CACHE", os.path.join(HF_CACHE_DIR, "hub"))
+os.environ.setdefault("TRANSFORMERS_CACHE", os.path.join(HF_CACHE_DIR, "transformers"))
+
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
+
+try:
+    from transformers import pipeline
+except ImportError:
+    pipeline = None
+
 SUPPORTED_EXT = (".jpg", ".jpeg", ".png", ".webp")
 RESIZE_WIDTH = 480
 MIN_COLOR_RATIO = 0.002
@@ -27,6 +42,88 @@ HUE_COLOR_RANGES = [
     (166, 175, "cor/rosa"),
     (175, 180, "cor/vermelho"),
 ]
+
+CLOTHING_LABELS = {
+    "t-shirt": "roupa/camiseta",
+    "shirt": "roupa/camisa",
+    "blouse": "roupa/blusa",
+    "jacket": "roupa/jaqueta",
+    "coat": "roupa/casaco",
+    "hoodie": "roupa/moletom",
+    "blazer": "roupa/blazer",
+    "dress": "roupa/vestido",
+    "skirt": "roupa/saia",
+    "jeans": "roupa/calca-jeans",
+    "pants": "roupa/calca",
+    "shorts": "roupa/shorts",
+    "sneakers": "roupa/tenis",
+    "shoes": "roupa/sapato",
+    "boots": "roupa/bota",
+    "hat": "roupa/chapeu",
+    "cap": "roupa/bone",
+}
+
+_clothing_classifier = None
+_clothing_detector_disabled = False
+
+
+def get_clothing_classifier():
+    global _clothing_classifier
+    global _clothing_detector_disabled
+
+    if _clothing_detector_disabled:
+        return None
+
+    if _clothing_classifier is not None:
+        return _clothing_classifier
+
+    if pipeline is None or Image is None:
+        _clothing_detector_disabled = True
+        tqdm.write("[AVISO] Detecção de roupas desativada (faltam libs: transformers e/ou pillow).")
+        return None
+
+    try:
+        os.makedirs(HF_CACHE_DIR, exist_ok=True)
+        _clothing_classifier = pipeline(
+            task="zero-shot-image-classification",
+            model="openai/clip-vit-base-patch32",
+            cache_dir=HF_CACHE_DIR,
+        )
+        return _clothing_classifier
+    except Exception as e:
+        _clothing_detector_disabled = True
+        tqdm.write(f"[AVISO] Falha ao iniciar detector de roupas: {e}")
+        return None
+
+
+def detectar_roupas(path, threshold=0.20, max_tags=4):
+    classifier = get_clothing_classifier()
+    if classifier is None:
+        return []
+
+    try:
+        with Image.open(path) as img:
+            img = img.convert("RGB")
+            resultados = classifier(
+                img,
+                candidate_labels=list(CLOTHING_LABELS.keys()),
+            )
+
+        tags = []
+        for item in resultados:
+            label = item.get("label")
+            score = item.get("score", 0.0)
+
+            if label in CLOTHING_LABELS and score >= threshold:
+                tags.append(CLOTHING_LABELS[label])
+
+            if len(tags) >= max_tags:
+                break
+
+        return tags
+    except Exception as e:
+        tqdm.write(f"[AVISO] Erro ao detectar roupas em {path}: {e}")
+        return []
 
 def detectar_cores(path, min_ratio=MIN_COLOR_RATIO):
     img = cv2.imread(path)
@@ -132,6 +229,9 @@ def processar_imagem(path):
     try:
         tags = set(detectar_cores(path_processamento))
 
+        for r in detectar_roupas(path_processamento):
+            tags.add(r)
+
         for l in detectar_luminosidade(path_processamento):
             tags.add(l)
 
@@ -142,6 +242,10 @@ def processar_imagem(path):
                 os.remove(temp_path)
             except OSError:
                 pass
+
+
+def filtrar_tags_por_prefixo(tags, prefixo):
+    return sorted([tag for tag in tags if tag.startswith(prefixo)])
 
 def main():
     if len(sys.argv) < 2:
@@ -171,7 +275,14 @@ def main():
         try:
             tags = processar_imagem(path)
             salvar_tags(path, tags)
+            cores = filtrar_tags_por_prefixo(tags, "cor/")
+            roupas = filtrar_tags_por_prefixo(tags, "roupa/")
+
+            cores_txt = ", ".join(cores) if cores else "nenhuma"
+            roupas_txt = ", ".join(roupas) if roupas else "nenhuma"
+
             tqdm.write(f"[OK] {path}")
+            tqdm.write(f"[TAGS] cores: {cores_txt} | roupas: {roupas_txt}")
         except Exception as e:
             print(f"\n[ERRO] {path}: {e}")
 
