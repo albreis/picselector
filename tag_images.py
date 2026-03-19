@@ -43,24 +43,24 @@ HUE_COLOR_RANGES = [
     (175, 180, "cor/vermelho"),
 ]
 
-CLOTHING_LABELS = {
-    "t-shirt": "roupa/camiseta",
-    "shirt": "roupa/camisa",
-    "blouse": "roupa/blusa",
-    "jacket": "roupa/jaqueta",
-    "coat": "roupa/casaco",
-    "hoodie": "roupa/moletom",
-    "blazer": "roupa/blazer",
-    "dress": "roupa/vestido",
-    "skirt": "roupa/saia",
-    "jeans": "roupa/calca-jeans",
-    "pants": "roupa/calca",
-    "shorts": "roupa/shorts",
-    "sneakers": "roupa/tenis",
-    "shoes": "roupa/sapato",
-    "boots": "roupa/bota",
-    "hat": "roupa/chapeu",
-    "cap": "roupa/bone",
+CLOTHING_PROMPTS = {
+    "a person wearing a t-shirt": "roupa/camiseta",
+    "a person wearing a shirt": "roupa/camisa",
+    "a person wearing a blouse": "roupa/blusa",
+    "a person wearing a jacket": "roupa/jaqueta",
+    "a person wearing a coat": "roupa/casaco",
+    "a person wearing a hoodie": "roupa/moletom",
+    "a person wearing a blazer": "roupa/blazer",
+    "a person wearing a dress": "roupa/vestido",
+    "a person wearing a skirt": "roupa/saia",
+    "a person wearing jeans": "roupa/calca-jeans",
+    "a person wearing pants": "roupa/calca",
+    "a person wearing shorts": "roupa/shorts",
+    "a person wearing sneakers": "roupa/tenis",
+    "a person wearing shoes": "roupa/sapato",
+    "a person wearing boots": "roupa/bota",
+    "a person wearing a hat": "roupa/chapeu",
+    "a person wearing a cap": "roupa/bone",
 }
 
 _clothing_classifier = None
@@ -96,7 +96,27 @@ def get_clothing_classifier():
         return None
 
 
-def detectar_roupas(path, threshold=0.20, max_tags=4):
+def gerar_recortes_roupa(img):
+    recortes = [img]
+    w, h = img.size
+
+    # Recorte central para reduzir ruído de fundo.
+    if w > 120 and h > 120:
+        margem_w = int(w * 0.12)
+        margem_h = int(h * 0.12)
+        recorte_central = img.crop((margem_w, margem_h, w - margem_w, h - margem_h))
+        recortes.append(recorte_central)
+
+    # Em retrato, prioriza tronco/parte superior para melhorar roupas.
+    if h > int(w * 1.15):
+        top_h = int(h * 0.68)
+        recorte_superior = img.crop((0, 0, w, top_h))
+        recortes.append(recorte_superior)
+
+    return recortes
+
+
+def detectar_roupas(path, threshold=0.10, max_tags=5):
     classifier = get_clothing_classifier()
     if classifier is None:
         return []
@@ -104,23 +124,43 @@ def detectar_roupas(path, threshold=0.20, max_tags=4):
     try:
         with Image.open(path) as img:
             img = img.convert("RGB")
+            recortes = gerar_recortes_roupa(img)
+
+        melhor_score_por_tag = {}
+        candidate_labels = list(CLOTHING_PROMPTS.keys())
+
+        for recorte in recortes:
             resultados = classifier(
-                img,
-                candidate_labels=list(CLOTHING_LABELS.keys()),
+                recorte,
+                candidate_labels=candidate_labels,
             )
 
+            for item in resultados:
+                label = item.get("label")
+                score = float(item.get("score", 0.0))
+                tag = CLOTHING_PROMPTS.get(label)
+                if not tag:
+                    continue
+                melhor_score_por_tag[tag] = max(melhor_score_por_tag.get(tag, 0.0), score)
+
+        if not melhor_score_por_tag:
+            return []
+
+        ordenado = sorted(melhor_score_por_tag.items(), key=lambda x: x[1], reverse=True)
+        melhor_score = ordenado[0][1]
+        limite_relativo = melhor_score * 0.60
+
         tags = []
-        for item in resultados:
-            label = item.get("label")
-            score = item.get("score", 0.0)
-
-            if label in CLOTHING_LABELS and score >= threshold:
-                tags.append(CLOTHING_LABELS[label])
-
+        for tag, score in ordenado:
+            if score < threshold:
+                continue
+            if score < limite_relativo:
+                continue
+            tags.append(tag)
             if len(tags) >= max_tags:
                 break
 
-        return tags
+        return sorted(set(tags))
     except Exception as e:
         tqdm.write(f"[AVISO] Erro ao detectar roupas em {path}: {e}")
         return []
@@ -183,10 +223,18 @@ def detectar_luminosidade(img_path):
         return ["luz/medio"]
 
 def salvar_tags(file_path, tags):
-    cmd = ["exiftool", "-overwrite_original"]
+    tags = sorted(set(tags))
+
+    cmd = [
+        "exiftool",
+        "-overwrite_original",
+        "-XMP:Subject=",
+        "-IPTC:Keywords=",
+    ]
 
     for tag in tags:
         cmd.append(f'-XMP:Subject+={tag}')
+        cmd.append(f'-IPTC:Keywords+={tag}')
 
     cmd.append(file_path)
 
