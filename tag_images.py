@@ -241,6 +241,11 @@ def detectar_cores(path, min_ratio=MIN_COLOR_RATIO):
     ratio_preto = np.mean(v < 45)
     ratio_branco = np.mean((s < 30) & (v > 220))
     ratio_cinza = np.mean((s < 30) & (v >= 45) & (v <= 220))
+    scores_cor = {
+        "cor/preto": ratio_preto,
+        "cor/branco": ratio_branco,
+        "cor/cinza": ratio_cinza,
+    }
 
     if ratio_preto >= min_ratio:
         tags.add("cor/preto")
@@ -251,14 +256,26 @@ def detectar_cores(path, min_ratio=MIN_COLOR_RATIO):
 
     mask_colorido = (s >= 35) & (v >= 35)
     if not np.any(mask_colorido):
+        tag_predominante, score_predominante = max(scores_cor.items(), key=lambda item: item[1])
+        if score_predominante > 0:
+            cor_predominante = tag_predominante.split("/", 1)[1]
+            tags.add(f"cor/predominante/{cor_predominante}")
         return list(tags)
 
     h_color = h[mask_colorido]
+    fracao_colorido = float(np.mean(mask_colorido))
 
     for start, end, tag in HUE_COLOR_RANGES:
         ratio_cor = np.mean((h_color >= start) & (h_color < end))
+        ratio_cor_total = ratio_cor * fracao_colorido
+        scores_cor[tag] = scores_cor.get(tag, 0.0) + ratio_cor_total
         if ratio_cor >= min_ratio:
             tags.add(tag)
+
+    tag_predominante, score_predominante = max(scores_cor.items(), key=lambda item: item[1])
+    if score_predominante > 0:
+        cor_predominante = tag_predominante.split("/", 1)[1]
+        tags.add(f"cor/predominante/{cor_predominante}")
 
     return list(tags)
 
@@ -277,17 +294,46 @@ def detectar_luminosidade(img_path):
     else:
         return ["luz/medio"]
 
+
+def normalizar_tag_key_value(tag):
+    if "/" in tag:
+        return tag
+    if ":" in tag:
+        return tag.replace(":", "/", 1)
+    return tag
+
+
+def tag_para_hierarquica(tag):
+    if "|" in tag:
+        return tag
+    if "/" in tag:
+        return tag.replace("/", "|", 1)
+    if ":" in tag:
+        return tag.replace(":", "|", 1)
+    return tag
+
 def salvar_tags(file_path, tags):
-    tags = sorted(set(tags))
+    tags = sorted({normalizar_tag_key_value(tag) for tag in tags})
 
     cmd = [
         "exiftool",
         "-overwrite_original",
         "-MWG:Keywords=",
+        "-IPTC:Keywords=",
+        "-XMP-dc:Subject=",
+        "-XMP-lr:HierarchicalSubject=",
+        "-XMP-digiKam:TagsList=",
     ]
 
     for tag in tags:
         cmd.append(f'-MWG:Keywords+={tag}')
+        cmd.append(f'-IPTC:Keywords+={tag}')
+        cmd.append(f'-XMP-dc:Subject+={tag}')
+        cmd.append(f'-XMP-digiKam:TagsList+={tag}')
+
+        # Lightroom hierarchical tags use '|'. digiKam reads this field too.
+        tag_hierarquica = tag_para_hierarquica(tag)
+        cmd.append(f'-XMP-lr:HierarchicalSubject+={tag_hierarquica}')
 
     cmd.append(file_path)
 
@@ -339,7 +385,7 @@ def processar_imagem(path):
         for l in detectar_luminosidade(path_processamento):
             tags.add(l)
 
-        return list(tags)
+        return sorted({normalizar_tag_key_value(tag) for tag in tags})
     finally:
         if temp_path and os.path.exists(temp_path):
             try:
