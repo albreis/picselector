@@ -315,10 +315,24 @@ def tag_para_hierarquica(tag):
 def salvar_tags(file_path, tags):
     tags = sorted({normalizar_tag_key_value(tag) for tag in tags})
 
+    cmd_limpar = [
+        "exiftool",
+        "-overwrite_original",
+        "-all=",
+        file_path,
+    ]
+
+    resultado_limpeza = subprocess.run(
+        cmd_limpar,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if resultado_limpeza.returncode != 0:
+        raise RuntimeError(f"Falha ao limpar metadados: {file_path}")
+
     cmd = [
         "exiftool",
         "-overwrite_original",
-        "-MWG:Keywords=",
         "-IPTC:Keywords=",
         "-XMP-dc:Subject=",
         "-XMP-lr:HierarchicalSubject=",
@@ -326,7 +340,6 @@ def salvar_tags(file_path, tags):
     ]
 
     for tag in tags:
-        cmd.append(f'-MWG:Keywords+={tag}')
         cmd.append(f'-IPTC:Keywords+={tag}')
         cmd.append(f'-XMP-dc:Subject+={tag}')
         cmd.append(f'-XMP-digiKam:TagsList+={tag}')
@@ -337,7 +350,13 @@ def salvar_tags(file_path, tags):
 
     cmd.append(file_path)
 
-    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    resultado_escrita = subprocess.run(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    if resultado_escrita.returncode != 0:
+        raise RuntimeError(f"Falha ao gravar metadados: {file_path}")
 
 def criar_resize_temporario(path, target_width=RESIZE_WIDTH):
     img = cv2.imread(path)
