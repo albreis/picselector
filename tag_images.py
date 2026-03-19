@@ -63,6 +63,24 @@ CLOTHING_PROMPTS = {
     "a person wearing a cap": "roupa/bone",
 }
 
+ENVIRONMENT_PROMPTS = {
+    "an indoor scene": "ambiente/interno",
+    "an outdoor scene": "ambiente/externo",
+    "a beach": "ambiente/praia",
+    "a forest or jungle": "ambiente/floresta",
+    "a mountain landscape": "ambiente/montanha",
+    "a city street": "ambiente/urbano",
+    "a rural countryside": "ambiente/rural",
+    "an office": "ambiente/escritorio",
+    "a bedroom": "ambiente/quarto",
+    "a kitchen": "ambiente/cozinha",
+    "a bathroom": "ambiente/banheiro",
+    "a restaurant": "ambiente/restaurante",
+    "a gym": "ambiente/academia",
+    "a shopping mall": "ambiente/shopping",
+    "a stadium": "ambiente/estadio",
+}
+
 _clothing_classifier = None
 _clothing_detector_disabled = False
 
@@ -165,6 +183,43 @@ def detectar_roupas(path, threshold=0.10, max_tags=5):
         tqdm.write(f"[AVISO] Erro ao detectar roupas em {path}: {e}")
         return []
 
+
+def detectar_ambiente(path, threshold=0.18, max_tags=3):
+    classifier = get_clothing_classifier()
+    if classifier is None:
+        return []
+
+    try:
+        with Image.open(path) as img:
+            img = img.convert("RGB")
+            resultados = classifier(
+                img,
+                candidate_labels=list(ENVIRONMENT_PROMPTS.keys()),
+            )
+
+        tags = []
+        melhor_score = float(resultados[0].get("score", 0.0)) if resultados else 0.0
+        limite_relativo = melhor_score * 0.55
+
+        for item in resultados:
+            label = item.get("label")
+            score = float(item.get("score", 0.0))
+            tag = ENVIRONMENT_PROMPTS.get(label)
+            if not tag:
+                continue
+            if score < threshold:
+                continue
+            if score < limite_relativo:
+                continue
+            tags.append(tag)
+            if len(tags) >= max_tags:
+                break
+
+        return sorted(set(tags))
+    except Exception as e:
+        tqdm.write(f"[AVISO] Erro ao detectar ambiente em {path}: {e}")
+        return []
+
 def detectar_cores(path, min_ratio=MIN_COLOR_RATIO):
     img = cv2.imread(path)
     if img is None:
@@ -228,13 +283,11 @@ def salvar_tags(file_path, tags):
     cmd = [
         "exiftool",
         "-overwrite_original",
-        "-XMP:Subject=",
-        "-IPTC:Keywords=",
+        "-MWG:Keywords=",
     ]
 
     for tag in tags:
-        cmd.append(f'-XMP:Subject+={tag}')
-        cmd.append(f'-IPTC:Keywords+={tag}')
+        cmd.append(f'-MWG:Keywords+={tag}')
 
     cmd.append(file_path)
 
@@ -279,6 +332,9 @@ def processar_imagem(path):
 
         for r in detectar_roupas(path_processamento):
             tags.add(r)
+
+        for a in detectar_ambiente(path_processamento):
+            tags.add(a)
 
         for l in detectar_luminosidade(path_processamento):
             tags.add(l)
@@ -332,12 +388,14 @@ def main():
             salvar_tags(path, tags)
             cores = filtrar_tags_por_prefixo(tags, "cor/")
             roupas = filtrar_tags_por_prefixo(tags, "roupa/")
+            ambientes = filtrar_tags_por_prefixo(tags, "ambiente/")
 
             cores_txt = ", ".join(cores) if cores else "nenhuma"
             roupas_txt = ", ".join(roupas) if roupas else "nenhuma"
+            ambientes_txt = ", ".join(ambientes) if ambientes else "nenhum"
 
             tqdm.write(f"[OK] {path}")
-            tqdm.write(f"[TAGS] cores: {cores_txt} | roupas: {roupas_txt}")
+            tqdm.write(f"[TAGS] cores: {cores_txt} | roupas: {roupas_txt} | ambiente: {ambientes_txt}")
         except Exception as e:
             print(f"\n[ERRO] {path}: {e}")
 
